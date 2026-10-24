@@ -1191,7 +1191,7 @@ static DWORD connected_gamepads(void)
 	/* The companion occupies port 1 without a physical controller. Never
 	pretend there is a pad in ordinary co-op or a local multiplayer lobby. */
 	if (virtual_campaign_pad())
-		mask |= XDEVICE_PORT1_MASK;
+		mask |= (1UL << 1);
 	/* the first pad shares port 0 with the keyboard (port_gamepad) */
 	for (port = 1; port < PORT_COUNT; port++)
 	{
