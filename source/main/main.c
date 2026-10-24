@@ -405,6 +405,7 @@ symbols in this file:
 #include "tag_files/files.h"
 #include "custom_edition_cache.h" /* port: custom_edition_level_name */
 #include "view_fov.h" /* port: display.fov, before the projection and culling */
+#include "port_config.h" /* bots.campaign: one camera for a virtual companion */
 
 #if defined(HALO_WINDOWS) || defined(HALO_ANDROID) || defined(__linux__)
 #define HALO_NATIVE_BUILD_INFO 1
@@ -1448,10 +1449,21 @@ void compute_window_bounds(
 	return;
 }
 
+/* Local campaign companion AI runs as a second player for game logic,
+but has no reason to own a camera or HUD viewport. Ordinary two-player
+co-op keeps its original split screen when bots.campaign is off. */
+static boolean main_campaign_companion_view(void)
+{
+	return config_boolean("bots.campaign") &&
+		game_connection() == _game_connection_local && game_is_cooperative() &&
+		local_player_count() >= 2;
+}
+
 short main_get_window_count(
 	void)
 {
-	boolean single_window = game_engine_force_single_screen() || cinematic_in_progress();
+	boolean single_window = game_engine_force_single_screen() ||
+		cinematic_in_progress() || main_campaign_companion_view();
 
 	return single_window ? 1 : PIN(local_player_count(), 1, MAXIMUM_WINDOWS);
 }
@@ -3304,8 +3316,10 @@ static void main_game_render(
 
 	window_count = PIN(local_player_count(), 1, MAXIMUM_LOCAL_PLAYERS);
 	player_window_count = window_count;
-	if (force_single_screen || cinematic_in_progress())
+	if (force_single_screen || cinematic_in_progress() || main_campaign_companion_view())
 	{
+		/* Render only the real player's viewport; the companion still
+		spawns and receives simulated movement and combat input. */
 		window_count = 1;
 		player_window_count = 1;
 	}
