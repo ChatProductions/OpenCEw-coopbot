@@ -1235,7 +1235,9 @@ static void interface_splitscreen_render(
 	if (game_engine_force_single_screen() || cinematic_in_progress())
 		return;
 
-	window_count = local_player_count();
+	/* port: campaign bot mode renders one viewport even though two local
+	players exist; use the renderer's effective window count for borders. */
+	window_count = main_get_window_count();
 
 	if (window_count <= 1)
 		return;
