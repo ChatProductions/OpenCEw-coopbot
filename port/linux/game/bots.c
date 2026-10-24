@@ -2418,6 +2418,22 @@ players_update_before_game's player_handle_weapon_swap), let go now and
 then, so that a second swap can follow a first */
 static void bots_bot_weapons(struct bots_bot *bot, struct bots_tick *tick)
 {
+	/* A magazine can be dry even when reserve ammunition remains.
+	Do not repeatedly pull the trigger: request a normal reload, including
+	under fire. The reload flag is edge-triggered later in bots_bot_update. */
+	if (tick->weapon_index != NONE && !bots_weapon_empty(tick->weapon_index))
+	{
+		struct weapon_datum *weapon = weapon_get(tick->weapon_index);
+		struct weapon_definition *definition = weapon_definition_get(weapon->definition_index);
+
+		if (definition->weapon.magazines.count > 0 &&
+			weapon->weapon.magazines[0].rounds_loaded <= 0 &&
+			weapon->weapon.magazines[0].rounds_total > 0)
+		{
+			tick->flags &= ~FLAG(_unit_control_weapon_primary_trigger_bit);
+			tick->flags |= FLAG(_unit_control_weapon_reload_bit);
+		}
+	}
 	if (tick->weapon_index == NONE || bots_weapon_empty(tick->weapon_index))
 	{
 		short slot;
