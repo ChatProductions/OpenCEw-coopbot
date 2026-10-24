@@ -1095,7 +1095,8 @@ static SDL_Gamepad *port_gamepad(SDL_Gamepad *gamepads[PORT_COUNT], int count, i
 {
 	if (count == 1)
 	{
-		BOOL split = pc_menu_split_players() != 0;
+		/* Keep the first pad with the human on port 0; the AI uses a\n		virtual port 1 rather than taking their controller. */
+		BOOL split = pc_menu_split_players() != 0 && !virtual_campaign_pad();
 
 		if (split != lone_gamepad_split && gamepad_idle(gamepads[0]))
 			lone_gamepad_split = split;
