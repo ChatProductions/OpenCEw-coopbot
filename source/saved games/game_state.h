@@ -41,6 +41,9 @@ void game_state_revert(
 /* port: network co-op's (game_state.c) */
 boolean game_state_port_saved_game_valid(
 	void);
+/* Local two-player campaign with an AI companion, not ordinary split-screen or network co-op. */
+boolean game_state_port_companion_mode(
+	void);
 void game_state_port_restamp_revert_time(
 	void);
 void game_state_save_to_persistent_storage(
@@ -133,7 +136,7 @@ void game_state_write_to_persistent_storage(
 	unsigned long *header_checksum,
 	long header_size,
 	long buffer_size);
-void game_state_read_from_persistent_storage(
+boolean game_state_read_from_persistent_storage(
 	void *buffer,
 	long buffer_size);
 void game_state_create_persistent_storage(
