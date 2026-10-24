@@ -80,6 +80,45 @@ static int virtual_campaign_pad(void)
 else -1 */
 extern double network_test_game_seconds(void);
 
+/* One-shot Republic Commando-style squad hotkeys. Stored on the input
+thread's normal gamepad poll and consumed in the game's next bot tick.
+These never synthesize player buttons and are silent in menus and chat. */
+static int squad_command_pending;
+static unsigned int squad_command_keys_down;
+
+int halo_campaign_bot_take_command(void)
+{
+	int command = squad_command_pending;
+	squad_command_pending = 0;
+	return command;
+}
+
+static void squad_command_keyboard(struct platform_input_state const *input, int active)
+{
+	static SDL_Scancode const keys[] =
+	{
+		SDL_SCANCODE_F1, SDL_SCANCODE_F2, SDL_SCANCODE_F3,
+		SDL_SCANCODE_F4, SDL_SCANCODE_F6
+	};
+	static int const orders[] = { 1, 2, 3, 4, 6 };
+	unsigned int down = 0;
+	int index;
+
+	for (index = 0; index < (int)(sizeof(keys) / sizeof(keys[0])); index++)
+	{
+		unsigned int mask = 1U << index;
+		if (input->keys[keys[index]])
+		{
+			down |= mask;
+			if (active && !(squad_command_keys_down & mask))
+				squad_command_pending = orders[index];
+		}
+	}
+	squad_command_keys_down = down;
+	if (!active)
+		squad_command_pending = 0;
+}
+
 /* ---------- device tables */
 
 XPP_DEVICE_TYPE XDEVICE_TYPE_GAMEPAD_TABLE;
@@ -1300,6 +1339,9 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		keys_held_over_switch(&input);
 		/* (a chat line typed takes the keyboard as the console does) */
 		console_active = console_is_active() || network_chat_typing();
+		squad_command_keyboard(&input, virtual_campaign_pad() &&
+			!input.menus && !console_active && !text_typing &&
+			!network_chat_keyboard_open());
 		held = console_active ? 0 : keyboard_bound_actions(&input);
 		keyboard_screenshot(held);
 		if (!console_active)
