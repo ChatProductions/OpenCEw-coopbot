@@ -60,6 +60,7 @@ symbols in this file:
 #include "input/input.h"
 #include "interface/terminal.h"
 #include "items/weapon_definitions.h"
+#include "units/vehicle_definitions.h"
 #include "main/console.h"
 #include "math/real_math.h"
 #include "objects/objects.h"
@@ -480,4 +481,83 @@ void cheat_all_vehicles(
 	}
 
 	return;
+}
+
+/* port: tag_get_name comes from the cache's loaded tag instances. */
+extern char *tag_get_name(long tag_index);
+
+/* Console-only convenience cheat for a Warthog on the current map.
+ * The console's network-client guard prevents non-host spawning.
+ * A loaded Warthog vehicle tag is required; a console command cannot load
+ * a new vehicle definition from an unrelated map. */
+boolean cheat_spawn_warthog(void)
+{
+	struct data_iterator player_iterator;
+	struct player_datum *player;
+	long player_index = NONE;
+	long fallback_player_index = NONE;
+	long warthog_tag_index = NONE;
+	struct tag_iterator tag_iterator;
+	long tag_index;
+	real_point3d origin;
+	real_vector3d forward, up;
+	struct object_placement_data placement;
+	long spawned_index;
+
+	/* A companion bot may be the first player in datum order. Prefer a
+	 * human at this machine, then use the first live player as fallback. */
+	data_iterator_new(&player_iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&player_iterator)) != NULL)
+	{
+		if (player->unit_index == NONE)
+			continue;
+		if (fallback_player_index == NONE)
+			fallback_player_index = player_iterator.datum_index;
+		if (player->local_player_index != NONE)
+		{
+			player_index = player_iterator.datum_index;
+			break;
+		}
+	}
+	if (player_index == NONE)
+		player_index = fallback_player_index;
+	if (player_index == NONE)
+	{
+		console_warning("cannot spawn Warthog: no active player");
+		return FALSE;
+	}
+
+	tag_iterator_new(&tag_iterator, VEHICLE_DEFINITION_TAG);
+	while ((tag_index = tag_iterator_next(&tag_iterator)) != NONE)
+	{
+		char const *name = tag_get_name(tag_index);
+		if (name && strstr(name, "warthog"))
+		{
+			warthog_tag_index = tag_index;
+			break;
+		}
+	}
+	if (warthog_tag_index == NONE)
+	{
+		console_warning("cannot spawn Warthog: this map has no loaded Warthog vehicle tag");
+		return FALSE;
+	}
+
+	player = player_get(player_index);
+	object_get_origin(player->unit_index, &origin);
+	object_get_orientation(player->unit_index, &forward, &up);
+	object_placement_data_new(&placement, warthog_tag_index, NONE);
+	placement.position.x = origin.x + forward.i * 5.f;
+	placement.position.y = origin.y + forward.j * 5.f;
+	placement.position.z = origin.z + 1.f;
+	placement.forward = forward;
+	placement.up = up;
+	spawned_index = object_new(&placement);
+	if (spawned_index == NONE)
+	{
+		console_warning("cannot spawn Warthog: no valid space or object slot");
+		return FALSE;
+	}
+	console_printf(FALSE, "spawned Warthog near player");
+	return TRUE;
 }
