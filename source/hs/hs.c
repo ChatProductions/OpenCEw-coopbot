@@ -15639,6 +15639,12 @@ static boolean hs_compile_and_evaluate_command(
 			return kick ? network_game_server_kick_player(name) : network_game_server_ban_player(name);
 		}
 	}
+	/* Console-only spawn: run after the network-client guard, so only the
+	 * host may create a vehicle in a multiplayer campaign. This bypasses
+	 * scenario-object-name lookups and the legacy multiplayer vehicle list. */
+	if (hs_host_player_command(expression, "cheat_spawn_warthog") ||
+		hs_host_player_command(expression, "spawn_warthog"))
+		return cheat_spawn_warthog();
 	csstrncpy(buffer, expression, sizeof(buffer));
 	buffer[sizeof(buffer)-1] = 0;
 	if (strchr(buffer, ';'))
