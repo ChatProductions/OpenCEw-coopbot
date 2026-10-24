@@ -434,7 +434,8 @@ void game_state_read_core(
 const char *game_state_get_persistent_storage_filename(
 	void)
 {
-	return "savegame.bin";
+	/* Do not overwrite the same profile's ordinary single-player save. */
+	return game_state_port_companion_mode() ? "savegame_coopbot.bin" : "savegame.bin";
 }
 
 static __inline boolean game_state_get_persistent_storage_path(
@@ -452,8 +453,12 @@ static void delete_persistent_storage(
 {
 	char path[256];
 
-	if (game_state_get_persistent_storage_path(path))
+	if (game_state_get_persistent_storage_path(path) &&
+		strlen(path) + strlen(game_state_get_persistent_storage_filename()) < sizeof(path))
+	{
+		strcat(path, game_state_get_persistent_storage_filename());
 		DeleteFileA(path);
+	}
 
 	return;
 }
@@ -477,7 +482,9 @@ static HANDLE game_state_open_persistent_storage(
 		{
 			game_state_get_persistent_storage_path(path);
 		}
-		strcat(path, "savegame.bin");
+		if (strlen(path) + strlen(directory ? "savegame.bin" : game_state_get_persistent_storage_filename()) >= sizeof(path))
+			return INVALID_HANDLE_VALUE;
+		strcat(path, directory ? "savegame.bin" : game_state_get_persistent_storage_filename());
 
 		file = CreateFileA(path, GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, 0,
 			NULL);
@@ -661,39 +668,38 @@ void game_state_write_to_persistent_storage(
 	return;
 }
 
-void game_state_read_from_persistent_storage(
+boolean game_state_read_from_persistent_storage(
 	void *buffer,
 	long buffer_size)
 {
 	HANDLE file;
 	unsigned long bytes_read;
+	boolean loaded = FALSE;
 
 	file = game_state_open_persistent_storage(NULL);
 	if (file != INVALID_HANDLE_VALUE)
 	{
-		/* port: read beside the game state, and taken once checked */
+		/* Accept only a validated image before running the after-load
+		callbacks or saving the in-memory checkpoint. */
 		void *image = malloc(buffer_size);
 
-		if (!image ||
-			SetFilePointer(file, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER ||
-			!ReadFile(file, image, buffer_size, &bytes_read, NULL) ||
-			bytes_read != buffer_size ||
-			!game_state_image_accept(image, buffer_size))
+		if (image &&
+			SetFilePointer(file, 0, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+			ReadFile(file, image, buffer_size, &bytes_read, NULL) &&
+			bytes_read == buffer_size &&
+			game_state_image_accept(image, buffer_size))
 		{
-			match_vassert(
-				"c:\\halo\\SOURCE\\saved games\\game_state_xbox.c",
-				383,
-				FALSE,
-				csprintf(temporary, "failed to read from persistent storage (#%d)",
-					GetLastError()));
-			delete_persistent_storage();
+			loaded = TRUE;
+		}
+		else
+		{
+			error(_error_silent, "failed to read valid persistent game state (#%d)", GetLastError());
 		}
 		(void)buffer;
 		free(image);
 		CloseHandle(file);
 	}
-
-	return;
+	return loaded;
 }
 
 void game_state_create_persistent_storage(
