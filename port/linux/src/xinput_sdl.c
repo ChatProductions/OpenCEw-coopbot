@@ -67,6 +67,15 @@ extern unsigned char network_chat_keyboard_open(void);
 /* port/linux/game/menu_functions.c: two or more players on this machine
 (co-op, or split screen in a network game) */
 extern unsigned char pc_menu_split_players(void);
+/* local campaign's second controller is virtual while campaign bots are on */
+extern unsigned char network_game_is_splitscreen_local(void);
+extern short player_ui_get_single_player_local_player_controller(short local_player_index);
+static int virtual_campaign_pad(void)
+{
+	return config_boolean("bots.campaign") && pc_menu_split_players() &&
+		!network_game_is_splitscreen_local() &&
+		player_ui_get_single_player_local_player_controller(0) == 0;
+}
 /* port/linux/game/network_test.c: the game's time in seconds while one runs,
 else -1 */
 extern double network_test_game_seconds(void);
@@ -1179,6 +1188,10 @@ static DWORD connected_gamepads(void)
 	DWORD mask = XDEVICE_PORT0_MASK;
 	int port;
 
+	/* The companion occupies port 1 without a physical controller. Never
+	pretend there is a pad in ordinary co-op or a local multiplayer lobby. */
+	if (virtual_campaign_pad())
+		mask |= XDEVICE_PORT1_MASK;
 	/* the first pad shares port 0 with the keyboard (port_gamepad) */
 	for (port = 1; port < PORT_COUNT; port++)
 	{
@@ -1265,6 +1278,13 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	if (port < 0)
 		return ERROR_DEVICE_NOT_CONNECTED;
 	platform_pump_events();
+	/* Bots supply the campaign companion's actual inputs in the game tick.
+	Report a connected, idle pad to avoid the controller-unplugged prompt. */
+	if (port == 1 && virtual_campaign_pad())
+	{
+		state->dwPacketNumber = controllers[port].packet_number;
+		return ERROR_SUCCESS;
+	}
 	count = sdl_gamepads(gamepads);
 	if (port == 0)
 	{
