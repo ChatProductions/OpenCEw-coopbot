@@ -492,7 +492,7 @@ static boolean bots_weapon_empty(long weapon_index)
 	{
 		long magazine;
 		for (magazine = 0; magazine < definition->weapon.magazines.count &&
-			magazine < MAXIMUM_NUMBER_OF_MAGAZINES_PER_WEAPON; magazine++)
+			magazine < (long)NUMBEROF(weapon->weapon.magazines); magazine++)
 		{
 			if (weapon->weapon.magazines[magazine].rounds_loaded > 0 ||
 				weapon->weapon.magazines[magazine].rounds_total > 0)
