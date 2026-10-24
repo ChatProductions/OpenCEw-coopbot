@@ -96,6 +96,10 @@ const char *config_string(char const *name);
 long config_integer(char const *name);
 int config_boolean(char const *name);
 void platform_log(char const *format, ...);
+/* port/linux/src/xinput_sdl.c: keyboard orders are one-shot events */
+int halo_campaign_bot_take_command(void);
+/* source/game/player_control.c: crosshair autoaim target of the human */
+long player_control_get_target_object_index(short local_player_index);
 
 /* ---------- constants */
 
@@ -133,6 +137,16 @@ enum
 	_bots_goal_follow,
 	/* a better weapon to pick up */
 	_bots_goal_item,
+};
+
+/* Squad commands use F1/F2/F3/F4/F6 in an active offline campaign. */
+enum
+{
+	_bots_order_search = 1,
+	_bots_order_follow = 2,
+	_bots_order_hold = 3,
+	_bots_order_regroup = 4,
+	_bots_order_focus = 6,
 };
 
 /* ---------- structures */
@@ -264,6 +278,12 @@ static struct
 	struct bots_bot bots[BOTS_MAXIMUM];
 	/* the skill setting, read once a tick for every bot */
 	short skill;
+	/* Offline co-op's one local Spartan follows one persistent squad order. */
+	short campaign_order;
+	real_point3d campaign_hold_position;
+	long campaign_hold_surface;
+	long campaign_focus_unit;
+	long campaign_focus_until;
 	/* the path search's state (80 KB: the engine's 1024 nodes, heap and
 	table), allocated once a game has bots; the searches made this tick */
 	struct path_state *search;
@@ -1226,6 +1246,10 @@ void bots_initialize_for_new_map(void)
 		bots_globals.bots[index].player_index = NONE;
 	bots_globals.map_ready = FALSE;
 	bots_globals.roam_point_count = 0;
+	bots_globals.campaign_order = _bots_order_follow;
+	bots_globals.campaign_hold_surface = NONE;
+	bots_globals.campaign_focus_unit = NONE;
+	bots_globals.campaign_focus_until = 0;
 	bots_globals.ticks = 0;
 	bots_globals.searches = 0;
 	bots_globals.search_failures = 0;
@@ -1891,6 +1915,66 @@ static long bots_campaign_leader(struct bots_bot *bot)
 	return NONE;
 }
 
+/* The crosshair can lock other objects besides enemies. Only real hostile
+campaign actors may be assigned as a focus-fire target. */
+static boolean bots_campaign_target_hostile(long unit_index)
+{
+	struct data_iterator iterator;
+	struct actor_datum *actor;
+	struct object_datum *object = object_try_and_get_and_verify_type(unit_index, _object_mask_unit);
+
+	if (!object || TEST_FLAG(object->object.damage_flags, _object_dead_bit) || !actor_data)
+		return FALSE;
+	data_iterator_new(&iterator, actor_data);
+	while ((actor = (struct actor_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		if (actor->meta.unit_index == unit_index)
+			return game_team_is_enemy(_game_team_player, actor->meta.team_index);
+	}
+	return FALSE;
+}
+
+static void bots_campaign_take_order(struct bots_bot *bot)
+{
+	int command = halo_campaign_bot_take_command();
+	if (!command)
+		return;
+	if (command == _bots_order_focus)
+	{
+		long target = player_control_get_target_object_index(0);
+		if (bots_campaign_target_hostile(target))
+		{
+			bots_globals.campaign_focus_unit = target;
+			bots_globals.campaign_focus_until = game_time_get() + TICKS_PER_SECOND * 8;
+			bot->next_look_tick = 0;
+			platform_log("squad: F6 focus fire, target %ld", target);
+		}
+		else
+			platform_log("squad: F6 no hostile under crosshair");
+		return;
+	}
+	bots_globals.campaign_order = (short)command;
+	bot->path.valid = FALSE;
+	bot->goal_kind = _bots_goal_none;
+	if (command == _bots_order_hold)
+	{
+		bots_globals.campaign_hold_position = object_get(bot->unit_index)->object.position;
+		bots_globals.campaign_hold_surface = bots_unit_surface(bot->unit_index,
+			&bots_globals.campaign_hold_position);
+		platform_log("squad: F3 hold position");
+	}
+	else
+	{
+		bots_globals.campaign_hold_surface = NONE;
+		if (command == _bots_order_search)
+			platform_log("squad: F1 search and destroy");
+		else if (command == _bots_order_follow)
+			platform_log("squad: F2 form up");
+		else if (command == _bots_order_regroup)
+			platform_log("squad: F4 regroup");
+	}
+}
+
 /* Campaign: stay near the human player, rather than roaming around the
 map. The path's destination updates as the human moves. */
 static void bots_choose_campaign_goal(struct bots_bot *bot, real_point3d const *position)
@@ -2064,7 +2148,21 @@ static void bots_bot_look(struct bots_bot *bot, struct bots_tick *tick)
 		struct object_datum *target_object;
 
 		if (!game_engine_running() && game_is_cooperative())
-			target_unit = bots_find_campaign_target(bot, tick->player, bots_tick_eye(tick));
+		{
+			long focus = bots_globals.campaign_focus_unit;
+			if (focus != NONE && tick->now <= bots_globals.campaign_focus_until &&
+				bots_campaign_target_hostile(focus) &&
+				bots_line_of_sight(tick->player->unit_index, bots_tick_eye(tick),
+					&object_get(focus)->object.bounding_sphere_center, focus))
+				target_unit = focus;
+			else
+			{
+				if (focus != NONE && (tick->now > bots_globals.campaign_focus_until ||
+					!bots_campaign_target_hostile(focus)))
+					bots_globals.campaign_focus_unit = NONE;
+				target_unit = bots_find_campaign_target(bot, tick->player, bots_tick_eye(tick));
+			}
+		}
 		else
 		{
 			target_player = bots_find_target(bot, tick->player, bots_tick_eye(tick));
@@ -2513,6 +2611,8 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	/* the goal, and the path to it. A dry companion first tries to
 	refill or replace its weapon, before chasing enemies or roaming. */
 	if (!game_engine_running() && game_is_cooperative() &&
+		bots_globals.campaign_order != _bots_order_hold &&
+		bots_globals.campaign_order != _bots_order_regroup &&
 		!bots_has_usable_weapon(tick.unit) &&
 		bots_campaign_scavenge(bot, tick.unit, &tick.position))
 	{
@@ -2526,8 +2626,38 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	}
 	else if (!game_engine_running() && game_is_cooperative())
 	{
-		if (!tick.fighting)
-			bots_choose_campaign_goal(bot, &tick.position);
+		if (bots_globals.campaign_order == _bots_order_hold)
+		{
+			if (!tick.fighting && bots_globals.campaign_hold_surface != NONE &&
+				bots_distance2d(&tick.position, &bots_globals.campaign_hold_position) > 1.5f)
+			{
+				real direction;
+				bots_set_goal(bot, _bots_goal_follow, &bots_globals.campaign_hold_position,
+					bots_globals.campaign_hold_surface);
+				if (bots_follow_path(bot, tick.player->unit_index, &tick.position, &direction))
+				{
+					tick.move_direction = direction;
+					tick.moving = TRUE;
+				}
+			}
+			else
+			{
+				/* Defend in place; still rotate, fire and throw grenades. */
+				tick.moving = FALSE;
+				bot->goal_kind = _bots_goal_none;
+			}
+		}
+		else if (!tick.fighting)
+		{
+			if (bots_globals.campaign_order == _bots_order_search &&
+				bot->target_unit_index != NONE &&
+				bot->target_last_surface_index != NONE &&
+				tick.now - bot->target_seen_tick < TICKS_PER_SECOND * 5)
+				bots_set_goal(bot, _bots_goal_enemy, &bot->target_last_position,
+					bot->target_last_surface_index);
+			else
+				bots_choose_campaign_goal(bot, &tick.position);
+		}
 		else
 		{
 			/* Strafing and aiming are independent, as in Halo, but free
@@ -2537,7 +2667,7 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 			long leader_unit = bots_campaign_leader(bot);
 
 			if (leader_unit != NONE &&
-				bots_distance2d(&tick.position, &object_get(leader_unit)->object.position) > 8.0f)
+				bots_distance2d(&tick.position, &object_get(leader_unit)->object.position) > (bots_globals.campaign_order == _bots_order_search ? 14.0f : 8.0f))
 			{
 				real direction;
 
@@ -2553,6 +2683,17 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	}
 	else if (!tick.fighting || bot->goal_kind == _bots_goal_item)
 		bots_choose_goal(bot, bot->player_index, &tick.position, tick.fighting);
+	if (!tick.fighting && bots_globals.campaign_order == _bots_order_regroup &&
+		!game_engine_running() && game_is_cooperative())
+	{
+		long leader = bots_campaign_leader(bot);
+		if (leader != NONE &&
+			bots_distance2d(&tick.position, &object_get(leader)->object.position) < 3.5f)
+		{
+			bots_globals.campaign_order = _bots_order_follow;
+			platform_log("squad: regroup complete; now following");
+		}
+	}
 	if (!tick.fighting)
 	{
 		bots_bot_walk(bot, &tick);
@@ -2675,6 +2816,8 @@ void bots_update_actions(struct player_action *actions)
 		bot = &bots_globals.bots[bot_index];
 		if (bot->player_index != iterator.datum_index)
 			bots_bot_reset(bot, iterator.datum_index, bot_index);
+		if (native_companion && bot->unit_index != NONE)
+			bots_campaign_take_order(bot);
 		if (absolute_index >= 0 && absolute_index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 			bots_bot_update(bot, bot_index, &actions[absolute_index]);
 		count++;
