@@ -44,6 +44,8 @@ void cheat_all_powerups(
 	void);
 void cheat_all_vehicles(
 	void);
+boolean cheat_spawn_warthog(
+	void);
 void cheats_dispose(
 	void);
 void cheats_dispose_from_old_map(
