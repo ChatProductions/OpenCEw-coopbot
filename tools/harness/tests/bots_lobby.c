@@ -49,12 +49,14 @@ struct network_game_server
 
 /* the world the lobby asks */
 static boolean local_game;
+static boolean campaign_mode_enabled;
 static long wanted;
 static short teams_setting;
 static long sends;
 static short next_color;
 
 static boolean network_game_is_splitscreen_local(void) { return local_game; }
+static boolean bots_campaign_enabled(void) { return campaign_mode_enabled; }
 static long bots_wanted_count(void) { return wanted; }
 static short bots_teams(void) { return teams_setting; }
 static boolean network_game_player_slot_held(long player_index) { (void)player_index; return FALSE; }
@@ -90,6 +92,7 @@ static void lobby(short game_engine_index, long maximum)
 	for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
 		network_game_invalidate_player(&server.game.players[index]);
 	local_game = TRUE;
+	campaign_mode_enabled = FALSE;
 	teams_setting = _bots_teams_even;
 	sends = 0;
 }
@@ -329,6 +332,69 @@ int main(int argc, char **argv)
 		}
 		CHECK(named == 15, "%ld of 15 bots named", named);
 		CHECK(!bots_machine_is_bot(0) && !bots_machine_is_bot(BOTS_FIRST_MACHINE - 1), "a real machine is a bot");
+		return 0;
+	}
+
+	/* opt-in local co-op: exactly one companion, always on the human team,
+	   ignoring bots.count and the multiplayer "against" team policy */
+	CASE("campaign-companion")
+	{
+		struct network_player *human;
+
+		lobby(0, 16);
+		human = player(0, 0);
+		wanted = 9;
+		teams_setting = _bots_teams_against;
+		campaign_mode_enabled = TRUE;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 1 && team0 == 1 && team1 == 0,
+			"campaign companion isn't the one ally: %ld / %ld", team0, team1);
+		CHECK(server.game.player_count == 2 && bot_in(0) && !bot_in(1),
+			"campaign companion did not occupy exactly one slot");
+		CHECK(sends == 1, "campaign lobby sent %ld times", sends);
+		network_game_server_port_bots(&server);
+		CHECK(sends == 1, "campaign companion changed on idle");
+		human->team_index = 1;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 1 && team0 == 0 && team1 == 1,
+			"campaign companion did not follow the human's team");
+		campaign_mode_enabled = FALSE;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 0 && server.game.player_count == 1,
+			"campaign companion stayed when disabled");
+		return 0;
+	}
+	/* the campaign setting is off by default */
+	CASE("campaign-disabled")
+	{
+		lobby(0, 16);
+		player(0, 0);
+		wanted = 9;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 0 && sends == 0,
+			"disabled companion joined campaign");
+		return 0;
+	}
+	/* no companion should enter a lobby another machine can join */
+	CASE("campaign-network")
+	{
+		lobby(0, 16);
+		player(0, 0);
+		campaign_mode_enabled = TRUE;
+		local_game = FALSE;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 0 && sends == 0,
+			"companion joined a network campaign");
+		return 0;
+	}
+	/* wait for a local human player before adding the companion */
+	CASE("campaign-no-player")
+	{
+		lobby(0, 16);
+		campaign_mode_enabled = TRUE;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 0 && sends == 0,
+			"campaign companion joined an empty lobby");
 		return 0;
 	}
 	fprintf(stderr, "unknown case: %s\n", case_name);
