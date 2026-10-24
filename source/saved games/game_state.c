@@ -127,6 +127,7 @@ symbols in this file:
 void object_bounds_cache_invalidate(void);
 
 void platform_log(const char *format, ...);
+int config_boolean(char const *name);
 
 /* ---------- constants */
 
@@ -337,6 +338,14 @@ void game_state_save(
 	return;
 }
 
+/* Only AI-companion local campaign may persist a two-player state.
+Never enable this for real split-screen or network co-op. */
+boolean game_state_port_companion_mode(void)
+{
+	return config_boolean("bots.campaign") && player_spawn_count == 2 &&
+		game_connection() == _game_connection_local;
+}
+
 /* port: whether game_state_revert has a saved state to go back to */
 boolean game_state_port_saved_game_valid(
 	void)
@@ -380,19 +389,34 @@ void game_state_revert(
 void game_state_save_to_persistent_storage(
 	void)
 {
-	if (player_spawn_count==1)
-	{
-		game_state_note_event("save and quit");
-		game_state_revert();
-		game_state_write_to_persistent_storage(
-			game_state_globals.base_address,
-			&game_state_globals.header->checksum,
-			sizeof(*game_state_globals.header),
-			/* the whole of the native builds' larger game state */
-			GAME_STATE_SIZE);
-	}
+	boolean companion = game_state_port_companion_mode();
 
-	return;
+	if (player_spawn_count != 1 && !companion)
+		return;
+	/* Save & Quit restores the most recent checkpoint, not an unsafe
+	mid-combat frame. For a new campaign with no checkpoint yet, record
+	one only when Halo's own safe-to-save predicate permits it. */
+	if (!game_state_globals.saved_game_valid && game_safe_to_save())
+		game_state_save();
+	if (!game_state_globals.saved_game_valid)
+	{
+		if (companion)
+			platform_log("coopbot: cannot Save & Quit yet: no valid safe checkpoint");
+		return;
+	}
+	game_state_note_event("save and quit");
+	game_state_revert();
+	/* If loading the checkpoint failed, it reset the map. Never write
+	that reset state over a persistent save. */
+	if (!game_state_globals.saved_game_valid)
+		return;
+	game_state_write_to_persistent_storage(
+		game_state_globals.base_address,
+		&game_state_globals.header->checksum,
+		sizeof(*game_state_globals.header),
+		GAME_STATE_SIZE);
+	if (companion)
+		platform_log("coopbot: Save & Quit wrote last checkpoint to companion save slot");
 }
 
 boolean game_state_test_persistent_storage(
@@ -415,7 +439,8 @@ boolean game_state_test_persistent_storage(
 		csstrncpy(map_name, header.map_name, sizeof(header.map_name));
 		map_name[sizeof(header.map_name) - 1] = 0;
 
-		success = TRUE;
+		/* A co-op save cannot be offered as a solo Continue, or vice versa. */
+		success = header.player_count == player_spawn_count;
 	}
 	else
 	{
@@ -1009,12 +1034,20 @@ void game_state_try_and_load_from_persistent_storage(
 	{
 		game_state_note_event("saved game loaded");
 		game_state_call_before_load_procs();
-		game_state_read_from_persistent_storage(
+		if (game_state_read_from_persistent_storage(
 			game_state_globals.base_address,
-			GAME_STATE_SIZE);
-		game_difficulty_level_set(main_get_difficulty());
-		game_state_call_after_load_procs();
-		game_state_save();
+			GAME_STATE_SIZE))
+		{
+			game_difficulty_level_set(main_get_difficulty());
+			game_state_call_after_load_procs();
+			game_state_save();
+			if (game_state_port_companion_mode())
+				platform_log("coopbot: loaded saved two-player campaign checkpoint");
+		}
+		else
+		{
+			platform_log("game state: persistent save rejected; beginning mission normally");
+		}
 	}
 
 	return;
