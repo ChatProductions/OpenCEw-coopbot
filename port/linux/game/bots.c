@@ -1796,26 +1796,30 @@ static void bots_choose_goal(struct bots_bot *bot, long player_index, real_point
 	}
 }
 
-/* Campaign: stay near the human player. Unlike a multiplayer bot, a
-companion never wanders to a random weapon spawn or an enemy team's base. */
-static void bots_choose_campaign_goal(struct bots_bot *bot, real_point3d const *position)
+/* Campaign leader is the real local player, never another bot. */
+static long bots_campaign_leader(struct bots_bot *bot)
 {
 	struct data_iterator iterator;
 	struct player_datum *player;
-	long leader_unit = NONE;
-	real_point3d ground;
-	long surface_index;
 
 	data_iterator_new(&iterator, player_data);
 	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
 	{
 		if (iterator.datum_index != bot->player_index && player->local_player_index != NONE &&
 			player->unit_index != NONE)
-		{
-			leader_unit = player->unit_index;
-			break;
-		}
+			return player->unit_index;
 	}
+	return NONE;
+}
+
+/* Campaign: stay near the human player, rather than roaming around the
+map. The path's destination updates as the human moves. */
+static void bots_choose_campaign_goal(struct bots_bot *bot, real_point3d const *position)
+{
+	long leader_unit = bots_campaign_leader(bot);
+	real_point3d ground;
+	long surface_index;
+
 	if (leader_unit == NONE || bots_distance2d(position, &object_get(leader_unit)->object.position) < 3.5f)
 	{
 		bot->goal_kind = _bots_goal_none;
@@ -2296,7 +2300,15 @@ static void bots_bot_unstick(struct bots_bot *bot, struct bots_tick *tick)
 				bots_globals.stuck_giveups++;
 				bot->goal_kind = _bots_goal_none;
 				bot->stuck_count = 0;
-				bots_pick_roam_goal(bot, &tick->position);
+				/* A companion must never switch to multiplayer roaming when
+				it is blocked; retry the leader's path instead. */
+				if (!game_engine_running() && game_is_cooperative())
+				{
+					bot->path.valid = FALSE;
+					bot->path_tick = now - TICKS_PER_SECOND;
+				}
+				else
+					bots_pick_roam_goal(bot, &tick->position);
 			}
 		}
 		else
@@ -2420,6 +2432,28 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	{
 		if (!tick.fighting)
 			bots_choose_campaign_goal(bot, &tick.position);
+		else
+		{
+			/* Strafing and aiming are independent, as in Halo, but free
+			combat movement must not make the companion abandon the
+			human player. Beyond the leash, path back while continuing
+			to aim and fire at the current hostile target. */
+			long leader_unit = bots_campaign_leader(bot);
+
+			if (leader_unit != NONE &&
+				bots_distance2d(&tick.position, &object_get(leader_unit)->object.position) > 8.0f)
+			{
+				real direction;
+
+				bots_choose_campaign_goal(bot, &tick.position);
+				if (bots_follow_path(bot, tick.player->unit_index, &tick.position, &direction))
+				{
+					tick.move_direction = direction;
+					tick.moving = TRUE;
+					tick.throttle_scale = 1.0f;
+				}
+			}
+		}
 	}
 	else if (!tick.fighting || bot->goal_kind == _bots_goal_item)
 		bots_choose_goal(bot, bot->player_index, &tick.position, tick.fighting);
