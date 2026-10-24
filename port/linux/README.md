@@ -382,19 +382,41 @@ Slayer's: below), and nothing that the machines send each other changes.
 
 ### Experimental campaign companion
 
-Set `bots.campaign = true` in `config.toml` (under `[bots]`) to
-request one computer-controlled player in an offline co-op campaign lobby.
-Start Multiplayer > CO-OP CAMPAIGN and select the second mission, Halo, for
-the first test. The bot uses the existing virtual network-player slot: it
-has no controller and no camera view. It follows the local human player,
-uses the game's pathfinding, and attacks hostile AI actors rather than
-other players. `bots.skill` controls its combat ability.
+In `config.toml`, set:
 
-This is an early implementation under development. It has not yet been
-validated through a complete campaign level. Squad hotkeys, vehicles,
-cinematic recovery, and checkpoint persistence are still to be tested or
-implemented. Friendly fire remains governed by the ordinary campaign
-rules; the companion is not immune to damage.
+```toml
+[bots]
+campaign = true
+skill = "normal"
+```
+
+Start Multiplayer > CO-OP CAMPAIGN and choose a second-player profile
+with your keyboard or first controller. No second physical controller
+is needed. The first test mission is Halo (the second campaign mission).
+The companion is a virtual second **local** player, controlled by the
+game's bot code. The game renders only Player 1's camera and does not
+display the normal split-screen divider while bot mode is enabled.
+
+Squad keys during gameplay: F1 Search & Destroy, F2 Form Up,
+F3 Hold Position, F4 Regroup, F6 Focus Fire (hostile under crosshair).
+It follows the human, fights hostile campaign actors, reloads, switches
+empty weapons and seeks nearby dropped guns. Friendly fire still applies.
+
+When the human enters a vehicle, the companion attempts to board that
+vehicle once close enough, preferring the gunner seat, then a passenger
+seat. It **never drives**. A gunner uses the vehicle's turret, rather
+than the companion's handheld ammunition. Vehicle behavior is experimental
+and needs an in-game Warthog test.
+
+**Save behavior:** Co-op checkpoints support Revert in the current
+session. Halo's persistent Save & Quit path is limited to one local
+player in `source/saved games/game_state.c`, so leaving an experimental
+two-player campaign does **not** preserve your checkpoint for a future
+session. Do not rely on Save & Quit in co-op bot mode yet.
+
+This is a work in progress. Vehicle seats, multi-level persistence, and
+cinematic recovery still need gameplay validation. Setting
+`bots.campaign = false` restores normal two-controller co-op.
 
 ## OpenCE gametypes
 
