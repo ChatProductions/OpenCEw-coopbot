@@ -665,6 +665,7 @@ struct widget_instance;
 #include "networking/network_server_manager.h"
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
 #include "rasterizer/rasterizer.h"
+#include "saved games/game_state.h"
 #include "saved games/player_profile.h"
 #include "saved games/playlist_profile.h"
 #include "saved games/saved_game_files.h"
@@ -8351,7 +8352,10 @@ static boolean ui_check_for_pause_game(
 		}
 		else
 		{
-			switch (local_player_count)
+			/* The second player is AI: show the same full campaign pause
+			menu as a solo session, including Quit (which persists its
+			checkpoint), not the ordinary split-screen pause menu. */
+			switch (game_state_port_companion_mode() ? 1 : local_player_count)
 			{
 			case 0:
 			case 1:
