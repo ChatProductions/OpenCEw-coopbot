@@ -467,8 +467,19 @@ static boolean bots_weapon_empty(long weapon_index)
 	struct weapon_definition *definition = weapon_definition_get(weapon->definition_index);
 
 	if (definition->weapon.magazines.count <= 0)
-		return FALSE;
-	return weapon->weapon.magazines[0].rounds_loaded + weapon->weapon.magazines[0].rounds_total <= 0;
+		/* Plasma weapons use battery age instead of magazines. */
+		return weapon->weapon.age >= 0.995f;
+	{
+		long magazine;
+		for (magazine = 0; magazine < definition->weapon.magazines.count &&
+			magazine < MAXIMUM_NUMBER_OF_MAGAZINES_PER_WEAPON; magazine++)
+		{
+			if (weapon->weapon.magazines[magazine].rounds_loaded > 0 ||
+				weapon->weapon.magazines[magazine].rounds_total > 0)
+				return FALSE;
+		}
+	}
+	return TRUE;
 }
 
 /* how full the weapon's magazine is, 0 to 1 (1 for one without) */
@@ -672,7 +683,7 @@ static void bots_item_set_unreachable(struct bots_bot *bot, long item_index)
 /* a weapon lying near the bot worth fetching: one better than the one it
 holds; NONE for none */
 static long bots_find_item(struct bots_bot *bot, struct unit_datum *unit, real_point3d const *position,
-	real maximum_distance)
+	real maximum_distance, boolean desperate)
 {
 	struct object_iterator iterator;
 	long best_index = NONE;
@@ -709,9 +720,21 @@ static long bots_find_item(struct bots_bot *bot, struct unit_datum *unit, real_p
 			if (other != NONE && weapon_get(other)->definition_index == item->definition_index)
 				held = TRUE;
 		}
-		if (held || value <= current_value)
-			continue;
-		score = distance - (real)(value - current_value) * 3.0f;
+		/* When armed, seek upgrades, not duplicate copies. When empty,
+		any functional dropped gun is useful, including a copy that
+		can refill ammunition for the weapon already carried. */
+		if (desperate)
+		{
+			if (value < 0 || bots_weapon_empty(iterator.index))
+				continue;
+			score = distance - (real)value * 0.2f;
+		}
+		else
+		{
+			if (held || value <= current_value)
+				continue;
+			score = distance - (real)(value - current_value) * 3.0f;
+		}
 		if (score < best_score)
 		{
 			best_score = score;
@@ -1773,7 +1796,7 @@ static void bots_choose_goal(struct bots_bot *bot, long player_index, real_point
 	}
 	if (now >= bot->item_check_tick)
 	{
-		long item_index = bots_find_item(bot, unit_get(player_get(player_index)->unit_index), position, fighting ? 8.0f : 20.0f);
+		long item_index = bots_find_item(bot, unit_get(player_get(player_index)->unit_index), position, fighting ? 8.0f : 20.0f, FALSE);
 
 		bot->item_check_tick = now + TICKS_PER_SECOND;
 		if (item_index != NONE)
@@ -1794,6 +1817,62 @@ static void bots_choose_goal(struct bots_bot *bot, long player_index, real_point
 	{
 		bots_pick_roam_goal(bot, position);
 	}
+}
+
+/* A spare firearm takes priority over running at Covenant with an empty one. */
+static boolean bots_has_usable_weapon(struct unit_datum *unit)
+{
+	short slot;
+	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+	{
+		long weapon_index = unit->unit.weapon_object_indices[slot];
+		if (weapon_index != NONE && !bots_weapon_empty(weapon_index))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* Campaign scavenging does not use the multiplayer roaming fallback.
+Walk to a nearby dropped weapon, take its ammo or swap to it using the
+normal pickup code, then resume the active squad order. */
+static boolean bots_campaign_scavenge(struct bots_bot *bot, struct unit_datum *unit,
+	real_point3d const *position)
+{
+	long now = game_time_get();
+
+	if (bot->goal_kind == _bots_goal_item)
+	{
+		struct item_datum *item = (struct item_datum *)object_try_and_get_and_verify_type(
+			bot->item_index, _object_mask_weapon);
+		if (item && item->object.parent_object_index == NONE &&
+			!bots_weapon_empty(bot->item_index) &&
+			now - bot->goal_tick < TICKS_PER_SECOND * 14 &&
+			(bot->item_first_press_tick < bot->goal_tick ||
+			 now - bot->item_first_press_tick < TICKS_PER_SECOND * 3))
+			return TRUE;
+		if (item && item->object.parent_object_index == NONE)
+			bots_item_set_unreachable(bot, bot->item_index);
+		bot->goal_kind = _bots_goal_none;
+		bot->item_check_tick = now + TICKS_PER_SECOND;
+	}
+	if (now < bot->item_check_tick)
+		return FALSE;
+	bot->item_check_tick = now + TICKS_PER_SECOND;
+	{
+		long item_index = bots_find_item(bot, unit, position, 18.0f, TRUE);
+		if (item_index != NONE)
+		{
+			real_point3d ground;
+			long surface_index = bots_surface_below(&object_get(item_index)->object.position, &ground);
+			if (surface_index != NONE)
+			{
+				bots_set_goal(bot, _bots_goal_item, &ground, surface_index);
+				bot->item_index = item_index;
+				return TRUE;
+			}
+		}
+	}
+	return FALSE;
 }
 
 /* Campaign leader is the real local player, never another bot. */
@@ -2088,7 +2167,8 @@ static void bots_bot_fight(struct bots_bot *bot, struct bots_tick *tick)
 	pitch_off = (real)fabs((real)atan2(dz, horizontal) - bot->pitch);
 	cone = (real)atan(0.35f / MAX(tick->target_distance, 0.5f)) * skill->fire_cone + 0.01f;
 	if (now - bot->target_first_seen_tick >= reaction_ticks && now - bot->target_seen_tick <= 3 &&
-		yaw_off < cone && pitch_off < cone * 1.5f && tick->weapon_index != NONE)
+		yaw_off < cone && pitch_off < cone * 1.5f && tick->weapon_index != NONE &&
+		!bots_weapon_empty(tick->weapon_index))
 	{
 		short tap_ticks = bots_weapon_tap_ticks(tick->weapon_index);
 
@@ -2240,9 +2320,13 @@ players_update_before_game's player_handle_weapon_swap), let go now and
 then, so that a second swap can follow a first */
 static void bots_bot_weapons(struct bots_bot *bot, struct bots_tick *tick)
 {
-	if (tick->weapon_index != NONE && bots_weapon_empty(tick->weapon_index))
+	if (tick->weapon_index == NONE || bots_weapon_empty(tick->weapon_index))
 	{
 		short slot;
+		/* Never hold the firing trigger with no usable ammunition. */
+		tick->flags &= ~FLAG(_unit_control_weapon_primary_trigger_bit);
+		bot->burst_until_tick = 0;
+		bot->pause_until_tick = 0;
 
 		for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
 		{
@@ -2426,9 +2510,21 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	tick.weapon_index = bots_current_weapon(tick.unit);
 	if (bot->target_unit_index != NONE && tick.now - bot->target_seen_tick <= TICKS_PER_SECOND / 2)
 		bots_bot_fight(bot, &tick);
-	/* the goal, and the path to it (while fighting, only a weapon close by:
-	towards it, still facing the enemy) */
-	if (!game_engine_running() && game_is_cooperative())
+	/* the goal, and the path to it. A dry companion first tries to
+	refill or replace its weapon, before chasing enemies or roaming. */
+	if (!game_engine_running() && game_is_cooperative() &&
+		!bots_has_usable_weapon(tick.unit) &&
+		bots_campaign_scavenge(bot, tick.unit, &tick.position))
+	{
+		real direction;
+		if (bots_follow_path(bot, tick.player->unit_index, &tick.position, &direction))
+		{
+			tick.move_direction = direction;
+			tick.moving = TRUE;
+			tick.throttle_scale = 1.0f;
+		}
+	}
+	else if (!game_engine_running() && game_is_cooperative())
 	{
 		if (!tick.fighting)
 			bots_choose_campaign_goal(bot, &tick.position);
