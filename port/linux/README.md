@@ -380,6 +380,22 @@ surfaces (`game/bots.c`). They are never in system link or internet games,
 nor in other gametypes (but SWAT, Infection and Gun Game, which are
 Slayer's: below), and nothing that the machines send each other changes.
 
+### Experimental campaign companion
+
+Set `bots.campaign = true` in `config.toml` (under `[bots]`) to
+request one computer-controlled player in an offline co-op campaign lobby.
+Start Multiplayer > CO-OP CAMPAIGN and select the second mission, Halo, for
+the first test. The bot uses the existing virtual network-player slot: it
+has no controller and no camera view. It follows the local human player,
+uses the game's pathfinding, and attacks hostile AI actors rather than
+other players. `bots.skill` controls its combat ability.
+
+This is an early implementation under development. It has not yet been
+validated through a complete campaign level. Squad hotkeys, vehicles,
+cinematic recovery, and checkpoint persistence are still to be tested or
+implemented. Friendly fire remains governed by the ordinary campaign
+rules; the companion is not immune to damage.
+
 ## OpenCE gametypes
 
 Create Game's Select Gametype screen has a bank between STANDARD and
@@ -498,6 +514,7 @@ the setting for one start of the game. It has priority over the file.
 | `game.enhanced_animations` | `true` | `HALO_ENHANCED_ANIMATIONS` | `true`: the player bipeds' grenade throws keep their legs moving, blended by speed and direction (crouched throws stay crouched, throws in the air use the jump's legs), Warthog and Scorpion riders stay seated to throw and let go of the grips to throw and reload, and a player turns with the aim while throwing, as while meleeing. `false`: the original animations, which freeze the legs during a throw and stand a rider up. Only in config.toml, not in the menus. |
 | `game.unlock_all_levels` | `false` | `HALO_UNLOCK_ALL_LEVELS` | `true`: a profile created afterward starts with all the campaign levels finished on all the difficulties. `false`: a new profile starts at The Pillar of Autumn, and each level opens when you finish the level before it, as on the Xbox. Existing profiles keep their progress. To start a profile over, type `profile_reset_campaign` in the console. |
 | `bots.count` | `0` | `HALO_BOTS` | Computer players (bots) in a local (split screen) Slayer game: `0` to `15` join its lobby with the players, as far as the game has room. Not in system link or internet games. `0`: none, as in the stock game. Refer to "Bots". |
+| `bots.campaign` | `false` | `HALO_BOT_CAMPAIGN` | One experimental autonomous companion in local campaign co-op. Does not affect normal multiplayer or internet co-op. |
 | `bots.skill` | `"normal"` | `HALO_BOT_SKILL` | How well the bots play: `"easy"`, `"normal"`, `"heroic"` or `"legendary"`: how soon they react, how far and how wide they see, how large their aim error is and how fast it settles, how fast they turn. |
 | `bots.teams` | `"even"` | `HALO_BOT_TEAMS` | In a team game: `"even"` puts the bots on both teams, evening them with the players; `"against"` puts them all on the team the players are not on. |
 | `paths.data` | `""` | `HALO_DATA_ROOT` | The data root. Refer to "Start the game". |
