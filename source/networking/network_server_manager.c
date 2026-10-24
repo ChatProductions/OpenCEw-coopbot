@@ -1547,15 +1547,16 @@ static void network_game_server_port_bots(
 	long slot;
 	long bot_index;
 	boolean changed = FALSE;
+	boolean campaign_companion;
 
 	if (server->state != _network_game_server_state_pregame || server->sent_start_game_message)
 		return;
+	campaign_companion = !server->game.variant.game_engine_index && bots_campaign_enabled();
 	if (network_game_is_splitscreen_local() && server->game.variant.game_engine_index == game_engine_slayer)
 		wanted = PIN(bots_wanted_count(), 0, BOTS_MAXIMUM);
 	/* A single virtual player may join a local campaign co-op lobby. It has no
 	view or controller; bots_update_actions supplies its input each tick. */
-	else if (network_game_is_splitscreen_local() && !server->game.variant.game_engine_index &&
-		bots_campaign_enabled())
+	else if (network_game_is_splitscreen_local() && campaign_companion)
 		wanted = 1;
 	for (bot_index = 0; bot_index < BOTS_MAXIMUM; bot_index++)
 		slot_of_bot[bot_index] = NONE;
@@ -1599,7 +1600,11 @@ static void network_game_server_port_bots(
 	{
 		long team_index;
 
-		if (bots_teams() == _bots_teams_against)
+		/* In campaign the companion must share the human's team, regardless
+		   of the multiplayer bot team setting. */
+		if (campaign_companion)
+			team_index = human_team;
+		else if (bots_teams() == _bots_teams_against)
 			team_index = human_team == 0 ? 1 : 0;
 		else
 			team_index = team_counts[1] < team_counts[0] ? 1 : 0;
