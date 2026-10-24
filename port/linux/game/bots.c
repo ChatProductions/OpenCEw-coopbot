@@ -1516,8 +1516,22 @@ static boolean bots_line_of_sight(long unit_index, real_point3d const *eye, real
 	vector.i = point->x - eye->x;
 	vector.j = point->y - eye->y;
 	vector.k = point->z - eye->z;
-	if (!collision_test_vector(_collision_test_for_line_of_sight_flags, eye, &vector, unit_index, &collision))
-		return TRUE;
+	/* The gunner's eyes sit inside the parent Warthog collision model.
+	 * Ignoring the biped alone causes the Warthog to block all sight rays.
+	 * Ignore its parent (and child gunner), but still test the world. */
+	{
+		long ignore_index = unit_index;
+		struct object_datum *shooter = object_try_and_get(unit_index);
+
+		if (shooter && shooter->object.parent_object_index != NONE)
+		{
+			struct object_datum *parent = object_try_and_get(shooter->object.parent_object_index);
+			if (parent && parent->object.type == _object_type_vehicle)
+				ignore_index = shooter->object.parent_object_index;
+		}
+		if (!collision_test_vector(_collision_test_for_line_of_sight_flags, eye, &vector, ignore_index, &collision))
+			return TRUE;
+	}
 	/* (the target's vehicle: seen) */
 	if (collision.type == _collision_result_object && target_unit_index != NONE &&
 		(collision.object_index == target_unit_index ||
@@ -1662,12 +1676,13 @@ static long bots_find_target(struct bots_bot *bot, struct player_datum *player, 
 system is the same one Halo uses to decide whether Covenant and Flood are
 hostile to the player; Marines remain allies. */
 static long bots_find_campaign_target(struct bots_bot *bot, struct player_datum *player,
-	real_point3d const *eye)
+	real_point3d const *eye, boolean vehicle_gunner)
 {
 	struct data_iterator iterator;
 	struct actor_datum *actor;
 	struct bots_skill_definition const *skill = &bots_skills[bots_globals.skill];
-	real half_view = 0.5f * skill->field_of_view_degrees * BOTS_DEGREES;
+	/* Warthog gunner can swivel a full circle; foot soldiers cannot. */
+	real half_view = vehicle_gunner ? BOTS_PI : 0.5f * skill->field_of_view_degrees * BOTS_DEGREES;
 	real best_score = REAL_MAX;
 	long best_unit = NONE;
 
@@ -1686,7 +1701,7 @@ static long bots_find_campaign_target(struct bots_bot *bot, struct player_datum 
 		if (!object || TEST_FLAG(object->object.damage_flags, _object_dead_bit))
 			continue;
 		distance = bots_distance3d(eye, &object->object.bounding_sphere_center);
-		reach = skill->sight_distance;
+		reach = vehicle_gunner ? MAX(skill->sight_distance, 55.0f) : skill->sight_distance;
 		if (unit_index == bot->target_unit_index)
 			reach *= 1.25f;
 		if (distance > reach)
@@ -2146,6 +2161,7 @@ struct bots_tick
 	real throttle_scale;
 	/* it has a target in sight, this far away */
 	boolean fighting;
+	boolean vehicle_gunner; /* turrets take control flags even without a readied hand weapon */
 	real target_distance;
 	struct player_action *action;
 };
@@ -2241,7 +2257,7 @@ static void bots_bot_look(struct bots_bot *bot, struct bots_tick *tick)
 				if (focus != NONE && (tick->now > bots_globals.campaign_focus_until ||
 					!bots_campaign_target_hostile(focus)))
 					bots_globals.campaign_focus_unit = NONE;
-				target_unit = bots_find_campaign_target(bot, tick->player, bots_tick_eye(tick));
+				target_unit = bots_find_campaign_target(bot, tick->player, bots_tick_eye(tick), tick->vehicle_gunner);
 			}
 		}
 		else
@@ -2346,10 +2362,13 @@ static void bots_bot_fight(struct bots_bot *bot, struct bots_tick *tick)
 	pitch_off = (real)fabs((real)atan2(dz, horizontal) - bot->pitch);
 	cone = (real)atan(0.35f / MAX(tick->target_distance, 0.5f)) * skill->fire_cone + 0.01f;
 	if (now - bot->target_first_seen_tick >= reaction_ticks && now - bot->target_seen_tick <= 3 &&
-		yaw_off < cone && pitch_off < cone * 1.5f && tick->weapon_index != NONE &&
-		!bots_weapon_empty(tick->weapon_index))
+		yaw_off < cone && pitch_off < cone * 1.5f &&
+		/* Gunner control flags drive the vehicle weapon directly. Do not
+		 * require a hand weapon with ammunition in the rider's inventory. */
+		(tick->vehicle_gunner ||
+			(tick->weapon_index != NONE && !bots_weapon_empty(tick->weapon_index))))
 	{
-		short tap_ticks = bots_weapon_tap_ticks(tick->weapon_index);
+		short tap_ticks = tick->vehicle_gunner ? 0 : bots_weapon_tap_ticks(tick->weapon_index);
 
 		if (tap_ticks > 0)
 		{
@@ -2624,6 +2643,12 @@ static void bots_bot_trace(struct bots_bot *bot, long bot_index, struct bots_tic
 		now - bot->target_seen_tick, tick->fighting ? " fighting" : "", (int)bot->stuck_count,
 		bot->yaw / BOTS_DEGREES, tick->action->throttle.i, tick->action->throttle.j, tick->action->control_flags,
 		bot->searches, bot->path_failures);
+	if (tick->vehicle_gunner)
+		platform_log("bots: turret gunner target %ld, aim %.1f/%.1f, trigger %s, vehicle weapon %s",
+			bot->target_unit_index,
+			bot->yaw / BOTS_DEGREES, bot->pitch / BOTS_DEGREES,
+			TEST_FLAG(tick->flags, _unit_control_weapon_primary_trigger_bit) ? "ON" : "off",
+			tick->weapon_index != NONE ? "ready" : "none");
 	if (tick->weapon_index != NONE)
 	{
 		struct weapon_datum *weapon = weapon_get(tick->weapon_index);
@@ -2716,6 +2741,7 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 			struct unit_datum *vehicle = unit_get(tick.object->object.parent_object_index);
 			riding_vehicle = TRUE;
 			gunner = vehicle->unit.gunner_object_index == tick.player->unit_index;
+			tick.vehicle_gunner = gunner;
 		}
 	}
 
