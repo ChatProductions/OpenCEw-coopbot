@@ -775,9 +775,9 @@ static boolean campaign_profile(short controller, struct player_profile *profile
 
 /* the levels the profile has reached (as the Xbox's list has them: those
 it has played, the one after the last it finished, the first) and finished,
-and its saved game's; in co-op, those either player's has reached and
-finished, and no saved game (a game of one player's does not go on with
-two: game_state.c's game_state_header_valid) */
+and its saved game's; in ordinary co-op, those either player's has reached
+and finished without a shared saved game. Local companion co-op has its own
+separate profile save, using game_state.c's matching player count. */
 static void campaign_levels_read(struct player_profile const *profile)
 {
 	char const *map_name;
@@ -804,7 +804,8 @@ static void campaign_levels_read(struct player_profile const *profile)
 				campaign.levels[level].finished[marker] |= (flags >> (marker + 1)) & 1;
 		}
 	}
-	if (player_spawn_count >= 2 || !ui_widget_port_saved_game(&map_name, &campaign.saved_level, &difficulty))
+	if ((player_spawn_count >= 2 && !config_boolean("bots.campaign")) ||
+		!ui_widget_port_saved_game(&map_name, &campaign.saved_level, &difficulty))
 		campaign.saved_level = NONE;
 }
 
