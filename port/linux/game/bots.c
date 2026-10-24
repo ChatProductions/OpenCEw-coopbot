@@ -2741,6 +2741,21 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 		bot->path.valid = FALSE;
 		tick.moving = FALSE;
 	}
+	else if (campaign && bots_campaign_leader_vehicle(bot) != NONE &&
+		bots_globals.campaign_order != _bots_order_hold)
+	{
+		/* Boarding is higher priority than weapon scavenging or combat
+		strafing: close the last few meters while still aiming at enemies. */
+		real direction;
+
+		bots_choose_campaign_goal(bot, &tick.position);
+		if (bots_follow_path(bot, tick.player->unit_index, &tick.position, &direction))
+		{
+			tick.move_direction = direction;
+			tick.moving = TRUE;
+			tick.throttle_scale = 1.0f;
+		}
+	}
 	else if (!game_engine_running() && game_is_cooperative() &&
 		bots_globals.campaign_order != _bots_order_hold &&
 		bots_globals.campaign_order != _bots_order_regroup &&
