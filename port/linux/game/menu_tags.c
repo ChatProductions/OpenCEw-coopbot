@@ -37,6 +37,7 @@ menu gets FRIENDLY FIRE too.
 #include "cseries.h"
 #include "bitmaps/bitmap_group.h"
 #include "game/game.h"
+#include "saved games/game_state.h"
 #include "tag_files/tag_groups.h"
 #include "text/text_group.h"
 #include "rasterizer/xbox/rasterizer_xbox_hardware_bitmaps.h"
@@ -2134,7 +2135,8 @@ static boolean full_screen_campaign_map(void)
 {
 	return tag_loaded('Soul', MULTIPLAYER_COLLECTION) == NONE &&
 		tag_loaded(UI_WIDGET_DEFINITION_TAG, CAMPAIGN_PAUSE_SCREEN) != NONE &&
-		(game_connection() != _game_connection_local || network_game_is_active() || !game_is_cooperative());
+		(game_connection() != _game_connection_local || network_game_is_active() ||
+		!game_is_cooperative() || game_state_port_companion_mode());
 }
 
 /* of those, a network game's: network co-op, whose pause menu gets FRIENDLY
@@ -2206,7 +2208,7 @@ void menu_tags_loaded(
 	build.game_map = game_map;
 	/* Settings must not pause the simulation in a network campaign. */
 	build.campaign = campaign && game_connection() == _game_connection_local &&
-		!network_game_is_active() && !game_is_cooperative();
+		!network_game_is_active() && (!game_is_cooperative() || game_state_port_companion_mode());
 	build.coop = coop;
 	widget_count = menus->widget_count;
 	build.widget_tags = malloc((widget_count + 1) * sizeof(long));
