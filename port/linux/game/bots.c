@@ -64,6 +64,7 @@ and each bot's kills and deaths; debug.bot_trace logs each bot's state.
 #include "ai/actors.h"
 #include "game/game_engine.h"
 #include "game/players.h"
+#include "interface/player_ui.h"
 #include "objects/objects.h"
 #include "units/units.h"
 #include "units/bipeds.h"
@@ -2499,9 +2500,14 @@ void bots_update_actions(struct player_action *actions)
 	struct data_iterator iterator;
 	struct player_datum *player;
 	long count = 0;
+	/* The original local campaign uses actual local player slots, not a
+	network lobby. Its second slot is a virtual controller in bot mode. */
+	boolean native_campaign = bots_campaign_enabled() && game_is_cooperative() &&
+		game_connection() == 0 && !network_game_is_splitscreen_local();
+	boolean local_game = network_game_is_splitscreen_local();
 
-	/* (local games alone: no other machine sees a bot) */
-	if ((!game_engine_running() && !game_is_cooperative()) || !network_game_is_splitscreen_local())
+	/* Never inject bot input into a game hosted for remote players. */
+	if ((!game_engine_running() && !game_is_cooperative()) || (!local_game && !native_campaign))
 		return;
 	data_iterator_new(&iterator, player_data);
 	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
@@ -2509,8 +2515,12 @@ void bots_update_actions(struct player_action *actions)
 		long bot_index;
 		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
 		struct bots_bot *bot;
+		boolean native_companion = native_campaign && player->local_player_index != NONE &&
+			player->local_player_index == player_ui_get_single_player_local_player_controller(1);
+		boolean lobby_bot = local_game && player->local_player_index == NONE &&
+			bots_machine_is_bot(player->network_player_data.machine_index);
 
-		if (player->local_player_index != NONE || !bots_machine_is_bot(player->network_player_data.machine_index))
+		if (!native_companion && !lobby_bot)
 			continue;
 		/* (the roaming places and the walkable surfaces once a game has
 		bots; the skill once a tick) */
@@ -2528,7 +2538,7 @@ void bots_update_actions(struct player_action *actions)
 			bots_globals.tick_searches = 0;
 			bots_paths_scan();
 		}
-		bot_index = player->network_player_data.machine_index - BOTS_FIRST_MACHINE;
+		bot_index = native_companion ? 0 : player->network_player_data.machine_index - BOTS_FIRST_MACHINE;
 		bot = &bots_globals.bots[bot_index];
 		if (bot->player_index != iterator.datum_index)
 			bots_bot_reset(bot, iterator.datum_index, bot_index);
