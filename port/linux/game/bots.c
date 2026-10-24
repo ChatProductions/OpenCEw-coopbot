@@ -1925,7 +1925,10 @@ static void bots_bot_reset(struct bots_bot *bot, long player_index, long bot_ind
 	bot->target_unit_index = NONE;
 	bot->target_last_surface_index = NONE;
 	bot->goal_surface_index = NONE;
-	bot->random = 0x2545F491UL * (unsigned long)(bot_index + 1) ^ (unsigned long)network_game_get_random_seed();
+	/* The original offline co-op campaign has no network game object.
+	Do not read network_game_get_random_seed() there: it asserts. */
+	bot->random = 0x2545F491UL * (unsigned long)(bot_index + 1) ^
+		(unsigned long)(network_game_get_game() ? network_game_get_random_seed() : game_time_get());
 	bot->strafe_sign = 1.0f;
 }
 
