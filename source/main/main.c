@@ -405,7 +405,8 @@ symbols in this file:
 #include "tag_files/files.h"
 #include "custom_edition_cache.h" /* port: custom_edition_level_name */
 #include "view_fov.h" /* port: display.fov, before the projection and culling */
-#include "port_config.h" /* bots.campaign: one camera for a virtual companion */
+/* port/linux/src/port_config.c: runtime toggle for local companion view */
+int config_boolean(char const *name);
 
 #if defined(HALO_WINDOWS) || defined(HALO_ANDROID) || defined(__linux__)
 #define HALO_NATIVE_BUILD_INFO 1
