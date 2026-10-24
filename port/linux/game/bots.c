@@ -67,6 +67,7 @@ and each bot's kills and deaths; debug.bot_trace logs each bot's state.
 #include "interface/player_ui.h"
 #include "objects/objects.h"
 #include "units/units.h"
+#include "units/unit_definitions.h"
 #include "units/bipeds.h"
 #include "items/items.h"
 #include "items/weapons.h"
@@ -1977,18 +1978,43 @@ static void bots_campaign_take_order(struct bots_bot *bot)
 
 /* Campaign: stay near the human player, rather than roaming around the
 map. The path's destination updates as the human moves. */
+/* A leader in a vehicle has no biped support surface; route to the ground
+under the vehicle so the companion can reach an available passenger seat. */
+static long bots_campaign_leader_vehicle(struct bots_bot *bot)
+{
+	long leader = bots_campaign_leader(bot);
+	struct object_datum *unit;
+	struct object_datum *vehicle;
+
+	if (leader == NONE || !(unit = object_try_and_get(leader)) ||
+		unit->object.parent_object_index == NONE)
+		return NONE;
+	vehicle = object_try_and_get(unit->object.parent_object_index);
+	return vehicle && vehicle->object.type == _object_type_vehicle &&
+		!TEST_FLAG(vehicle->object.damage_flags, _object_dead_bit) ?
+		unit->object.parent_object_index : NONE;
+}
+
 static void bots_choose_campaign_goal(struct bots_bot *bot, real_point3d const *position)
 {
 	long leader_unit = bots_campaign_leader(bot);
+	long leader_vehicle = bots_campaign_leader_vehicle(bot);
 	real_point3d ground;
 	long surface_index;
+	struct object_datum *leader_object;
 
-	if (leader_unit == NONE || bots_distance2d(position, &object_get(leader_unit)->object.position) < 3.5f)
+	if (leader_unit == NONE)
 	{
 		bot->goal_kind = _bots_goal_none;
 		return;
 	}
-	surface_index = bots_unit_surface(leader_unit, &ground);
+	leader_object = object_get(leader_vehicle != NONE ? leader_vehicle : leader_unit);
+	if (bots_distance2d(position, &leader_object->object.position) < 3.0f)
+	{
+		bot->goal_kind = _bots_goal_none;
+		return;
+	}
+	surface_index = bots_unit_surface(leader_vehicle != NONE ? leader_vehicle : leader_unit, &ground);
 	if (surface_index == NONE)
 		return;
 	bots_set_goal(bot, _bots_goal_follow, &ground, surface_index);
@@ -2123,6 +2149,61 @@ struct bots_tick
 	real target_distance;
 	struct player_action *action;
 };
+
+/* The engine's vehicle_scripting_find_available_seats uses 1 for gunner
+and 2 for passenger (see units.c). Never request its driver type (3).
+Only native local campaign uses this: multiplayer bots are unchanged. */
+static boolean bots_campaign_vehicle_board(struct bots_bot *bot, struct bots_tick *tick)
+{
+	long vehicle_index = bots_campaign_leader_vehicle(bot);
+	struct object_datum *vehicle;
+	short seat = NONE;
+	short preference;
+
+	if (vehicle_index == NONE || tick->object->object.parent_object_index != NONE)
+		return FALSE;
+	vehicle = object_get(vehicle_index);
+	if (bots_distance2d(&tick->position, &vehicle->object.position) > 3.5f ||
+		(real)fabs(tick->position.z - vehicle->object.position.z) > 2.5f)
+		return FALSE;
+	for (preference = 1; preference <= 2; preference++)
+	{
+		if (vehicle_scripting_find_available_seats(vehicle_index, "", preference, &seat, 1) > 0 &&
+			unit_can_enter_seat(tick->player->unit_index, vehicle_index, seat, NULL))
+		{
+			struct unit_definition *definition = unit_definition_get(unit_get(vehicle_index)->definition_index);
+			struct unit_seat *seat_definition = TAG_BLOCK_GET_ELEMENT(
+				&definition->unit.seats, seat, struct unit_seat);
+
+			/* Scripted boarding checks that this biped has the seat's
+			animation before entering; direct unit_enter_seat does not. */
+			unit_scripting_enter_vehicle(tick->player->unit_index, vehicle_index, seat_definition->label);
+			if (tick->unit->object.parent_object_index == vehicle_index)
+			{
+				bot->goal_kind = _bots_goal_none;
+				bot->path.valid = FALSE;
+				bot->stuck_count = 0;
+				platform_log("bots: companion boarded vehicle %ld as %s", vehicle_index,
+					preference == 1 ? "gunner" : "passenger");
+				return TRUE;
+			}
+		}
+	}
+	return FALSE;
+}
+
+/* If the human gets out, the bot leaves too. The engine handles seat-exit
+animation and refuses exits while an animation is busy; retry next tick. */
+static void bots_campaign_vehicle_exit(struct bots_bot *bot, struct bots_tick *tick)
+{
+	long parent = tick->object->object.parent_object_index;
+	struct object_datum *vehicle = parent != NONE ? object_try_and_get(parent) : NULL;
+
+	if (vehicle && vehicle->object.type == _object_type_vehicle &&
+		parent != bots_campaign_leader_vehicle(bot) &&
+		unit_try_and_exit_seat(tick->player->unit_index))
+		platform_log("bots: companion leaving vehicle %ld", parent);
+}
 
 /* the unit's eyes: its head marker, as unit_get_head_position finds it
 (the marker's matrix from the object's node matrices, which nothing in the
@@ -2558,6 +2639,9 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 {
 	struct bots_tick tick;
 	real vitality;
+	boolean campaign = !game_engine_running() && game_is_cooperative();
+	boolean riding_vehicle = FALSE;
+	boolean gunner = FALSE;
 
 	csmemset(&tick, 0, sizeof(tick));
 	tick.skill = &bots_skills[bots_globals.skill];
@@ -2614,6 +2698,27 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	}
 	bot->last_position = tick.position;
 
+	/* Campaign companions board the vehicle their human is driving.
+	A free gunner seat takes priority; a passenger seat is a fallback.
+	On dismount, leave the vehicle. Never issue a driver action. */
+	if (campaign)
+	{
+		bots_campaign_vehicle_exit(bot, &tick);
+		if (bots_campaign_vehicle_board(bot, &tick))
+			return; /* seat entry changes the unit's transform this tick */
+		tick.position = tick.object->object.position;
+	}
+	if (tick.object->object.parent_object_index != NONE)
+	{
+		struct object_datum *parent = object_try_and_get(tick.object->object.parent_object_index);
+		if (parent && parent->object.type == _object_type_vehicle)
+		{
+			struct unit_datum *vehicle = unit_get(tick.object->object.parent_object_index);
+			riding_vehicle = TRUE;
+			gunner = vehicle->unit.gunner_object_index == tick.player->unit_index;
+		}
+	}
+
 	/* hurt: it turns to look for who did it */
 	vitality = tick.object->object.body_vitality + tick.object->object.shield_vitality;
 	if (vitality < bot->last_vitality - 0.01f)
@@ -2621,12 +2726,22 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	bot->last_vitality = vitality;
 
 	bots_bot_look(bot, &tick);
-	tick.weapon_index = bots_current_weapon(tick.unit);
+	tick.weapon_index = gunner ?
+		bots_current_weapon(unit_get(tick.object->object.parent_object_index)) :
+		bots_current_weapon(tick.unit);
 	if (bot->target_unit_index != NONE && tick.now - bot->target_seen_tick <= TICKS_PER_SECOND / 2)
 		bots_bot_fight(bot, &tick);
 	/* the goal, and the path to it. A dry companion first tries to
 	refill or replace its weapon, before chasing enemies or roaming. */
-	if (!game_engine_running() && game_is_cooperative() &&
+	if (riding_vehicle)
+	{
+		/* Vehicle motion comes from its human driver. The bot still looks
+		for enemies and operates the gunner turret through its trigger. */
+		bot->goal_kind = _bots_goal_none;
+		bot->path.valid = FALSE;
+		tick.moving = FALSE;
+	}
+	else if (!game_engine_running() && game_is_cooperative() &&
 		bots_globals.campaign_order != _bots_order_hold &&
 		bots_globals.campaign_order != _bots_order_regroup &&
 		!bots_has_usable_weapon(tick.unit) &&
@@ -2710,20 +2825,36 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 			platform_log("squad: regroup complete; now following");
 		}
 	}
-	if (!tick.fighting)
+	if (!riding_vehicle && !tick.fighting)
 	{
 		bots_bot_walk(bot, &tick);
 		bots_bot_yield(bot_index, &tick);
 	}
-	else if (bot->goal_kind == _bots_goal_item)
+	else if (!riding_vehicle && bot->goal_kind == _bots_goal_item)
 	{
 		real direction;
 
 		if (bots_follow_path(bot, tick.player->unit_index, &tick.position, &direction))
 			tick.move_direction = direction;
 	}
-	bots_bot_weapons(bot, &tick);
-	bots_bot_unstick(bot, &tick);
+	if (!riding_vehicle)
+	{
+		bots_bot_weapons(bot, &tick);
+		bots_bot_unstick(bot, &tick);
+	}
+	else
+	{
+		/* Neither gunner nor passenger drives, jumps, melees, reloads or
+		throws grenades. A passenger also does not fire a weapon. */
+		tick.moving = FALSE;
+		tick.flags &= ~(FLAG(_unit_control_jump_bit) |
+			FLAG(_unit_control_use_equipment_bit) |
+			FLAG(_unit_control_throw_grenade_bit) |
+			FLAG(_unit_control_weapon_reload_bit) |
+			FLAG(_unit_control_swap_weapons_bit));
+		if (!gunner)
+			tick.flags &= ~FLAG(_unit_control_weapon_primary_trigger_bit);
+	}
 
 	if (tick.moving)
 	{
