@@ -410,6 +410,10 @@ static const struct config_setting config_settings[] =
 		"Computer players (bots) in a local (split screen) Slayer game: 0 to 15\n"
 		"join its lobby with the players, as far as the game has room. Not in\n"
 		"system link or internet games. 0: none, as in the stock game." },
+	{ "bots.campaign", _config_boolean, "false", "HALO_BOT_CAMPAIGN", _environment_value, _platform_all,
+		"A single computer companion joins local campaign co-op as player two.\n"
+		"It follows you and fights hostile campaign actors. Experimental, local only.\n"
+		"False leaves the stock co-op player setup unchanged." },
 	{ "bots.skill", _config_string, "\"normal\"", "HALO_BOT_SKILL", _environment_value, _platform_all,
 		"How well the bots play: \"easy\", \"normal\", \"heroic\" or \"legendary\"\n"
 		"(how soon they react, how well they aim, how far they see)." },
