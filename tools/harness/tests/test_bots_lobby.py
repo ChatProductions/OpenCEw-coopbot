@@ -12,13 +12,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, constant, enum_with, function, mutated, read, run, structure  # noqa: E402
 
 CASES = ["fills", "room", "fewer", "even", "against", "follows-players", "never-network", "slayer-only",
-         "not-once-started", "no-player-no-bots", "names-and-machines"]
+         "not-once-started", "no-player-no-bots", "names-and-machines", "campaign-companion", "campaign-disabled", "campaign-network", "campaign-no-player"]
 GAME_MANAGER_FUNCTIONS = ("network_game_invalidate_player", "network_player_is_valid", "network_game_player_is_valid",
                           "network_game_add_player", "network_game_remove_player")
 
 # a fault in network_game_server_port_bots, and the case that must catch it
 NEGATIVE_CONTROLS = {
-    "bots-in-network-games": (("network_game_is_splitscreen_local() && ", ""), "never-network"),
+    "bots-in-network-games": (("if (network_game_is_splitscreen_local() && server->game.variant.game_engine_index == game_engine_slayer)",
+                               "if (server->game.variant.game_engine_index == game_engine_slayer)"), "never-network"),
     "bots-in-any-gametype": ((" && server->game.variant.game_engine_index == game_engine_slayer", ""), "slayer-only"),
     "bots-once-started": (("server->state != _network_game_server_state_pregame || server->sent_start_game_message",
                            "server->state != _network_game_server_state_pregame"), "not-once-started"),
@@ -26,6 +27,12 @@ NEGATIVE_CONTROLS = {
     "against-the-players": (("human_team == 0 ? 1 : 0", "human_team"), "against"),
     "one-too-many-stays": (("bot_index >= wanted; bot_index--", "bot_index > wanted; bot_index--"), "fewer"),
     "bots-alone": (("if (human_team == NONE)\n\t\twanted = 0;", ""), "no-player-no-bots"),
+    "campaign-in-network": (("else if (network_game_is_splitscreen_local() && campaign_companion)",
+                             "else if (campaign_companion)"), "campaign-network"),
+    "campaign-ignores-toggle": (("campaign_companion = !server->game.variant.game_engine_index && bots_campaign_enabled();",
+                                 "campaign_companion = !server->game.variant.game_engine_index;"), "campaign-disabled"),
+    "campaign-wrong-team": (("if (campaign_companion)\n\t\t\tteam_index = human_team;",
+                             "if (0)\n\t\t\tteam_index = human_team;"), "campaign-companion"),
     "teams-not-followed": (("else if (server->game.players[slot_of_bot[bot_index]].team_index != team_index)",
                             "else if (0)"), "follows-players"),
 }
