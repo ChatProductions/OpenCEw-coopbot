@@ -1949,6 +1949,20 @@ static boolean coop_player2_choose(short controller)
 	{
 		return campaign_fail();
 	}
+	/* An enabled campaign companion uses the other local controller slot as
+	an input sink. The game simulates that player's buttons in bots.c, so
+	selecting their profile with player 1's keyboard/gamepad is allowed.
+	Keep the original two-controller requirement for ordinary local co-op. */
+	if (config_boolean("bots.campaign"))
+	{
+		short human_controller = player_ui_get_single_player_local_player_controller(0);
+		short bot_controller = human_controller == 0 ? 1 : 0;
+
+		player_ui_set_single_player_local_player_controller(1, bot_controller);
+		player_ui_set_active_player_profile(1, profile_list.indices[profile_list.chosen], &profile);
+		platform_log("campaign companion: player 2's profile selected, virtual controller %d", bot_controller);
+		return TRUE;
+	}
 	if (controller == player_ui_get_single_player_local_player_controller(0))
 	{
 		display_error_text_deferred(L"Player 2 chooses their\r\nprofile with their own\r\ncontroller.",
