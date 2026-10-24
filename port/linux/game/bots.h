@@ -28,6 +28,7 @@ enum
 
 /* the settings (bots.count, bots.skill, bots.teams) */
 long bots_wanted_count(void);
+boolean bots_campaign_enabled(void);
 short bots_skill(void);
 short bots_teams(void);
 
